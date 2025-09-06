@@ -1,26 +1,67 @@
-// script.js - 使用 Supabase 实现实时同步 (修正版)
+// script.js - 使用 Supabase 实现实时同步 (完全修正版)
 document.addEventListener('DOMContentLoaded', function() {
-  // Supabase 配置 - 请替换为您的实际值
+  // 首先检查 Supabase 库是否已加载
+  if (typeof supabase === 'undefined') {
+    console.error('Supabase 库未正确加载，请检查网络连接或CDN链接');
+    // 回退到本地存储
+    loadFallbackData();
+    return;
+  }
+
+  // Supabase 配置
   const SUPABASE_URL = 'https://jowzvigeeiizylcsadgx.supabase.co';
   const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impvd3p2aWdlZWlpenlsY3NhZGd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTcxMjIxOTQsImV4cCI6MjA3MjY5ODE5NH0.9RnjFr1BaiNKpBTLNXvQG3yQzhA98AC81Bxkv4lMl3c';
 
   // 初始化 Supabase 客户端
-  const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-  const SEMESTER_START = new Date(2025, 8, 1); // 2025-09-01
+  // 常量定义
+  const SEMESTER_START = new Date(2025, 8, 1);
   const TOTAL_WEEKS = 22;
   const DAYS = ['一', '二', '三', '四', '五', '六', '日'];
+
+  // 内嵌示例数据
+  const EMBEDDED_SAMPLE = [
+    {"table_id":1,"week":3,"day":"一","status":"free"},
+    {"table_id":1,"week":3,"day":"二","status":"booked"},
+    {"table_id":1,"week":3,"day":"三","status":"free"},
+    {"table_id":1,"week":3,"day":"四","status":"free"},
+    {"table_id":1,"week":3,"day":"五","status":"booked"},
+    {"table_id":1,"week":3,"day":"六","status":"free"},
+    {"table_id":1,"week":3,"day":"日","status":"free"},
+    {"table_id":1,"week":4,"day":"一","status":"booked"},
+    {"table_id":1,"week":4,"day":"二","status":"free"},
+    {"table_id":1,"week":4,"day":"三","status":"free"},
+    {"table_id":1,"week":4,"day":"四","status":"free"},
+    {"table_id":1,"week":4,"day":"五","status":"free"},
+    {"table_id":1,"week":4,"day":"六","status":"booked"},
+    {"table_id":1,"week":4,"day":"日","status":"free"},
+    {"table_id":2,"week":3,"day":"一","status":"free"},
+    {"table_id":2,"week":3,"day":"二","status":"free"},
+    {"table_id":2,"week":3,"day":"三","status":"booked"},
+    {"table_id":2,"week":3,"day":"四","status":"free"},
+    {"table_id":2,"week":3,"day":"五","status":"free"},
+    {"table_id":2,"week":3,"day":"六","status":"free"},
+    {"table_id":2,"week":3,"day":"日","status":"booked"},
+    {"table_id":2,"week":4,"day":"一","status":"free"},
+    {"table_id":2,"week":4,"day":"二","status":"booked"},
+    {"table_id":2,"week":4,"day":"三","status":"free"},
+    {"table_id":2,"week":4,"day":"四","status":"free"},
+    {"table_id":2,"week":4,"day":"五","status":"free"},
+    {"table_id":2,"week":4,"day":"六","status":"free"},
+    {"table_id":2,"week":4,"day":"日","status":"free"}
+  ];
 
   // 主加载函数
   async function loadSchedule() {
     try {
       // 从 Supabase 获取数据
-      const { data: scheduleData, error } = await supabase
+      const { data: scheduleData, error } = await supabaseClient
         .from('schedules')
         .select('*');
       
       if (error) {
-        console.error('Error fetching data:', error);
+        console.error('从Supabase获取数据错误:', error);
         // 回退到本地存储或示例数据
         await loadFallbackData();
         return;
@@ -39,7 +80,7 @@ document.addEventListener('DOMContentLoaded', function() {
         setupRealtimeSubscription();
       }
     } catch (error) {
-      console.error('Failed to load schedule:', error);
+      console.error('加载日程失败:', error);
       await loadFallbackData();
     }
   }
@@ -60,7 +101,7 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
     } catch (e) {
-      console.error('Error loading fallback data:', e);
+      console.error('加载回退数据错误:', e);
     }
     
     // 使用内嵌示例数据
@@ -76,7 +117,10 @@ document.addEventListener('DOMContentLoaded', function() {
   // 渲染表格
   function renderSchedule(gridId, data) {
     const grid = document.getElementById(gridId);
-    if (!grid) return;
+    if (!grid) {
+      console.error(`找不到元素 #${gridId}`);
+      return;
+    }
     
     grid.innerHTML = '';
     
@@ -118,7 +162,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     grid.addEventListener('click', async (ev) => {
       const cell = ev.target.closest('td');
-      if (!cell) return;
+      if (!cell || !cell.dataset.week) return;
       
       const week = parseInt(cell.dataset.week);
       const day = cell.dataset.day;
@@ -133,7 +177,7 @@ document.addEventListener('DOMContentLoaded', function() {
       // 保存到 Supabase
       try {
         // 检查是否已存在记录
-        const { data: existingRecords } = await supabase
+        const { data: existingRecords } = await supabaseClient
           .from('schedules')
           .select('id')
           .eq('table_id', tableId)
@@ -142,7 +186,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         if (existingRecords && existingRecords.length > 0) {
           // 更新现有记录
-          const { error } = await supabase
+          const { error } = await supabaseClient
             .from('schedules')
             .update({ status: newStatus })
             .eq('id', existingRecords[0].id);
@@ -150,7 +194,7 @@ document.addEventListener('DOMContentLoaded', function() {
           if (error) throw error;
         } else {
           // 创建新记录
-          const { error } = await supabase
+          const { error } = await supabaseClient
             .from('schedules')
             .insert([{ table_id: tableId, week, day, status: newStatus }]);
           
@@ -163,7 +207,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // 更新本地存储作为备份
         updateLocalStorage(tableId, week, day, newStatus);
       } catch (error) {
-        console.error('Error saving to Supabase:', error);
+        console.error('保存到Supabase失败:', error);
         
         // 回退到本地存储
         if (fallbackData) {
@@ -177,18 +221,24 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // 设置实时订阅
   function setupRealtimeSubscription() {
-    // 订阅 schedules 表的更改
-    const subscription = supabase
-      .channel('schedules-changes')
-      .on('postgres_changes', 
-          { event: '*', schema: 'public', table: 'schedules' }, 
-          (payload) => {
-            console.log('Change received!', payload);
-            // 重新加载数据以反映更改
-            loadSchedule();
-          }
-      )
-      .subscribe();
+    try {
+      // 订阅 schedules 表的更改
+      const subscription = supabaseClient
+        .channel('schedules-changes')
+        .on('postgres_changes', 
+            { event: '*', schema: 'public', table: 'schedules' }, 
+            (payload) => {
+              console.log('接收到变更:', payload);
+              // 重新加载数据以反映更改
+              loadSchedule();
+            }
+        )
+        .subscribe();
+      
+      console.log('实时订阅已建立');
+    } catch (error) {
+      console.error('设置实时订阅失败:', error);
+    }
   }
 
   // 更新本地存储
@@ -207,7 +257,7 @@ document.addEventListener('DOMContentLoaded', function() {
       
       window.localStorage.setItem('schedule_data', JSON.stringify(scheduleData));
     } catch (error) {
-      console.error('Error updating local storage:', error);
+      console.error('更新本地存储失败:', error);
     }
   }
 
@@ -236,38 +286,6 @@ document.addEventListener('DOMContentLoaded', function() {
   function isAdminPage() {
     return window.location.pathname.includes('admin');
   }
-
-  // 内嵌示例数据
-  const EMBEDDED_SAMPLE = [
-    {"table_id":1,"week":3,"day":"一","status":"free"},
-    {"table_id":1,"week":3,"day":"二","status":"booked"},
-    {"table_id":1,"week":3,"day":"三","status":"free"},
-    {"table_id":1,"week":3,"day":"四","status":"free"},
-    {"table_id":1,"week":3,"day":"五","status":"booked"},
-    {"table_id":1,"week":3,"day":"六","status":"free"},
-    {"table_id":1,"week":3,"day":"日","status":"free"},
-    {"table_id":1,"week":4,"day":"一","status":"booked"},
-    {"table_id":1,"week":4,"day":"二","status":"free"},
-    {"table_id":1,"week":4,"day":"三","status":"free"},
-    {"table_id":1,"week":4,"day":"四","status":"free"},
-    {"table_id":1,"week":4,"day":"五","status":"free"},
-    {"table_id":1,"week":4,"day":"六","status":"booked"},
-    {"table_id":1,"week":4,"day":"日","status":"free"},
-    {"table_id":2,"week":3,"day":"一","status":"free"},
-    {"table_id":2,"week":3,"day":"二","status":"free"},
-    {"table_id":2,"week":3,"day":"三","status":"booked"},
-    {"table_id":2,"week":3,"day":"四","status":"free"},
-    {"table_id":2,"week":3,"day":"五","status":"free"},
-    {"table_id":2,"week":3,"day":"六","status":"free"},
-    {"table_id":2,"week":3,"day":"日","status":"booked"},
-    {"table_id":2,"week":4,"day":"一","status":"free"},
-    {"table_id":2,"week":4,"day":"二","status":"booked"},
-    {"table_id":2,"week":4,"day":"三","status":"free"},
-    {"table_id":2,"week":4,"day":"四","status":"free"},
-    {"table_id":2,"week":4,"day":"五","status":"free"},
-    {"table_id":2,"week":4,"day":"六","status":"free"},
-    {"table_id":2,"week":4,"day":"日","status":"free"}
-  ];
 
   // 添加一个短暂的延迟，确保 Supabase 客户端完全初始化
   setTimeout(loadSchedule, 100);
