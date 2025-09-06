@@ -1,10 +1,243 @@
-// script.js - 从 2025-09-01（星期一）开始，并自动填充第 1-22 周
-// 优先尝试后端 -> 再尝试相对静态文件 -> 回退到内嵌示例数据
+// script.js - 使用 Supabase 实现实时同步
 
-const SEMESTER_START = new Date(2025, 8, 1); // 2025-09-01 (month 8 = September)
+// Supabase 配置 - 需要替换为您的实际值
+const SUPABASE_URL = 'https://jowzvigeeiizylcsadgx.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impvd3p2aWdlZWlpenlsY3NhZGd4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTcxMjIxOTQsImV4cCI6MjA3MjY5ODE5NH0.9RnjFr1BaiNKpBTLNXvQG3yQzhA98AC81Bxkv4lMl3c';
+
+// 初始化 Supabase 客户端
+const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const SEMESTER_START = new Date(2025, 8, 1); // 2025-09-01
 const TOTAL_WEEKS = 22;
+const DAYS = ['一', '二', '三', '四', '五', '六', '日'];
 
-// 内嵌示例数据（可选，用于在没有外部数据时显示一些预约样例）
+// 主加载函数
+async function loadSchedule() {
+  try {
+    // 从 Supabase 获取数据
+    const { data: scheduleData, error } = await supabase
+      .from('schedules')
+      .select('*');
+    
+    if (error) {
+      console.error('Error fetching data:', error);
+      // 回退到本地存储或示例数据
+      await loadFallbackData();
+      return;
+    }
+    
+    // 渲染表格
+    renderSchedule('grid1', scheduleData.filter(item => item.table_id === 1));
+    renderSchedule('grid2', scheduleData.filter(item => item.table_id === 2));
+    
+    // 如果是管理员页面，添加编辑功能
+    if (isAdminPage()) {
+      addEditFunctionality('grid1', 1);
+      addEditFunctionality('grid2', 2);
+    } else {
+      // 如果是展示页面，设置实时订阅
+      setupRealtimeSubscription();
+    }
+  } catch (error) {
+    console.error('Failed to load schedule:', error);
+    await loadFallbackData();
+  }
+}
+
+// 回退数据加载
+async function loadFallbackData() {
+  try {
+    const stored = window.localStorage.getItem('schedule_data');
+    if (stored) {
+      const scheduleData = JSON.parse(stored);
+      renderSchedule('grid1', scheduleData.filter(item => item.table_id === 1));
+      renderSchedule('grid2', scheduleData.filter(item => item.table_id === 2));
+      
+      if (isAdminPage()) {
+        addEditFunctionality('grid1', 1);
+        addEditFunctionality('grid2', 2);
+      }
+      return;
+    }
+  } catch (e) {
+    console.error('Error loading fallback data:', e);
+  }
+  
+  // 使用内嵌示例数据
+  renderSchedule('grid1', EMBEDDED_SAMPLE.filter(item => item.table_id === 1));
+  renderSchedule('grid2', EMBEDDED_SAMPLE.filter(item => item.table_id === 2));
+  
+  if (isAdminPage()) {
+    addEditFunctionality('grid1', 1, EMBEDDED_SAMPLE);
+    addEditFunctionality('grid2', 2, EMBEDDED_SAMPLE);
+  }
+}
+
+// 渲染表格
+function renderSchedule(gridId, data) {
+  const grid = document.getElementById(gridId);
+  if (!grid) return;
+  
+  grid.innerHTML = '';
+  
+  for (let week = 1; week <= TOTAL_WEEKS; week++) {
+    const row = document.createElement('tr');
+    row.innerHTML = `<td>第${week}周</td>`;
+    
+    const startDate = weekStartDate(week);
+    
+    DAYS.forEach((day, index) => {
+      const cellDate = new Date(startDate);
+      cellDate.setDate(startDate.getDate() + index);
+      const dateStr = `${cellDate.getMonth() + 1}/${cellDate.getDate()}`;
+      
+      const cell = document.createElement('td');
+      // 查找数据中对应条目
+      const record = data.find(d => d.week === week && d.day === day);
+      const status = record ? record.status : 'free';
+      
+      cell.innerHTML = `
+        <div class="date">${dateStr}</div>
+        <div class="status">${status === 'booked' ? '●' : ''}</div>
+      `;
+      cell.className = `cell ${status}`;
+      cell.dataset.week = week;
+      cell.dataset.day = day;
+      
+      row.appendChild(cell);
+    });
+    
+    grid.appendChild(row);
+  }
+}
+
+// 添加编辑功能
+function addEditFunctionality(gridId, tableId, fallbackData) {
+  const grid = document.getElementById(gridId);
+  if (!grid) return;
+  
+  grid.addEventListener('click', async (ev) => {
+    const cell = ev.target.closest('td');
+    if (!cell) return;
+    
+    const week = parseInt(cell.dataset.week);
+    const day = cell.dataset.day;
+    const currentStatus = cell.classList.contains('free') ? 'free' : 'booked';
+    const newStatus = currentStatus === 'free' ? 'booked' : 'free';
+    
+    // 更新 UI
+    cell.className = `cell ${newStatus}`;
+    const statusDiv = cell.querySelector('.status');
+    if (statusDiv) statusDiv.textContent = newStatus === 'booked' ? '●' : '';
+    
+    // 保存到 Supabase
+    try {
+      // 检查是否已存在记录
+      const { data: existingRecords } = await supabase
+        .from('schedules')
+        .select('id')
+        .eq('table_id', tableId)
+        .eq('week', week)
+        .eq('day', day);
+      
+      if (existingRecords && existingRecords.length > 0) {
+        // 更新现有记录
+        const { error } = await supabase
+          .from('schedules')
+          .update({ status: newStatus })
+          .eq('id', existingRecords[0].id);
+        
+        if (error) throw error;
+      } else {
+        // 创建新记录
+        const { error } = await supabase
+          .from('schedules')
+          .insert([{ table_id: tableId, week, day, status: newStatus }]);
+        
+        if (error) throw error;
+      }
+      
+      // 显示成功通知
+      showNotification('更改已保存!');
+      
+      // 更新本地存储作为备份
+      updateLocalStorage(tableId, week, day, newStatus);
+    } catch (error) {
+      console.error('Error saving to Supabase:', error);
+      
+      // 回退到本地存储
+      if (fallbackData) {
+        updateLocalStorage(tableId, week, day, newStatus, fallbackData);
+      }
+      
+      showNotification('保存失败，已保存到本地', true);
+    }
+  });
+}
+
+// 设置实时订阅
+function setupRealtimeSubscription() {
+  // 订阅 schedules 表的更改
+  const subscription = supabase
+    .channel('schedules-changes')
+    .on('postgres_changes', 
+        { event: '*', schema: 'public', table: 'schedules' }, 
+        (payload) => {
+          console.log('Change received!', payload);
+          // 重新加载数据以反映更改
+          loadSchedule();
+        }
+    )
+    .subscribe();
+}
+
+// 更新本地存储
+function updateLocalStorage(tableId, week, day, status, fallbackData) {
+  try {
+    let scheduleData = fallbackData || [];
+    const existingIndex = scheduleData.findIndex(
+      d => d.table_id === tableId && d.week === week && d.day === day
+    );
+    
+    if (existingIndex >= 0) {
+      scheduleData[existingIndex].status = status;
+    } else {
+      scheduleData.push({ table_id: tableId, week, day, status });
+    }
+    
+    window.localStorage.setItem('schedule_data', JSON.stringify(scheduleData));
+  } catch (error) {
+    console.error('Error updating local storage:', error);
+  }
+}
+
+// 显示通知
+function showNotification(message, isError = false) {
+  const notification = document.getElementById('notification');
+  if (!notification) return;
+  
+  notification.textContent = message;
+  notification.className = `notification ${isError ? 'error' : ''} show`;
+  
+  setTimeout(() => {
+    notification.className = 'notification';
+  }, 3000);
+}
+
+// 辅助函数
+function weekStartDate(weekNumber) {
+  const daysToAdd = (weekNumber - 1) * 7;
+  const d = new Date(SEMESTER_START);
+  d.setDate(d.getDate() + daysToAdd);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function isAdminPage() {
+  return window.location.pathname.includes('admin');
+}
+
+// 内嵌示例数据
 const EMBEDDED_SAMPLE = [
   {"table_id":1,"week":3,"day":"一","status":"free"},
   {"table_id":1,"week":3,"day":"二","status":"booked"},
@@ -36,132 +269,5 @@ const EMBEDDED_SAMPLE = [
   {"table_id":2,"week":4,"day":"日","status":"free"}
 ];
 
-async function fetchWithFallback() {
-  // 尝试真实后端（适用于部署到服务器或本地启动 http 服务时）
-  try {
-    const res = await fetch('/api/schedule', { cache: "no-store" });
-    if (res.ok) return await res.json();
-  } catch (e) { /* ignore */ }
-
-  // 尝试相对静态文件（当你把 api/schedule.json 放到同目录下时有效）
-  try {
-    const res2 = await fetch('./api/schedule.json', { cache: "no-store" });
-    if (res2.ok) return await res2.json();
-  } catch (e) { /* ignore */ }
-
-  // 本地 localStorage（优先，保存用户编辑）
-  const stored = window.localStorage.getItem('mock_schedule');
-  if (stored) {
-    try { return JSON.parse(stored); } catch(e) { /* ignore */ }
-  }
-
-  // 最后回退到内嵌示例数据（若想默认全 free，可返回 []）
-  return EMBEDDED_SAMPLE;
-}
-
-function weekStartDate(weekNumber) {
-  // weekNumber 从 1 开始。第1周的星期一为 SEMESTER_START
-  const daysToAdd = (weekNumber - 1) * 7;
-  const d = new Date(SEMESTER_START);
-  d.setDate(d.getDate() + daysToAdd);
-  d.setHours(0,0,0,0);
-  return d;
-}
-
-async function loadSchedule() {
-  const data = await fetchWithFallback();
-
-  // 为渲染方便，确保 data 是数组
-  const scheduleData = Array.isArray(data) ? data : [];
-
-  const grid1 = document.getElementById('grid1');
-  grid1.innerHTML = '';
-  populateSchedule(grid1, scheduleData.filter(item => item.table_id === 1));
-
-  const grid2 = document.getElementById('grid2');
-  grid2.innerHTML = '';
-  populateSchedule(grid2, scheduleData.filter(item => item.table_id === 2));
-
-  // 若为管理员页面，启用编辑功能
-  if (window.location.pathname.endsWith('/admin.html') || window.location.pathname.endsWith('admin.html')) {
-    addEditFunctionality('grid1', 1, scheduleData);
-    addEditFunctionality('grid2', 2, scheduleData);
-  }
-}
-
-function populateSchedule(grid, data) {
-  // 填充第 1 到 第 TOTAL_WEEKS 周（保证即使没有后端数据也能显示 1-22 周）
-  for (let week = 1; week <= TOTAL_WEEKS; week++) {
-    const row = document.createElement('tr');
-    row.innerHTML = `<td>第${week}周</td>`;
-
-    const startDate = weekStartDate(week); // 该周星期一
-    const days = ['一','二','三','四','五','六','日'];
-
-    days.forEach((day, index) => {
-      const cellDate = new Date(startDate);
-      cellDate.setDate(startDate.getDate() + index);
-      const dateStr = `${cellDate.getMonth() + 1}/${cellDate.getDate()}`;
-
-      const cell = document.createElement('td');
-      // 查找 data 中对应条目（若不存在则默认 free）
-      const status = data.find(d => d.week === week && d.day === day)?.status || 'free';
-
-      cell.innerHTML = `
-        <div class="date">${dateStr}</div>
-        <div class="status">${status === 'booked' ? '●' : ''}</div>
-      `;
-      cell.className = `cell ${status}`;
-      row.appendChild(cell);
-    });
-
-    grid.appendChild(row);
-  }
-}
-
-function saveMockData(data) {
-  try { window.localStorage.setItem('mock_schedule', JSON.stringify(data)); } catch(e) {}
-}
-
-// 编辑功能（事件委托）：点击单元格切换状态，尝试提交到后端，失败则回写 localStorage
-function addEditFunctionality(gridId, tableId, data) {
-  const grid = document.getElementById(gridId);
-  grid.addEventListener('click', async (ev) => {
-    const cell = ev.target.closest('.cell');
-    if (!cell) return;
-    const row = cell.parentNode;
-    const weekText = row.firstChild.textContent;
-    const week = parseInt(weekText.match(/\d+/)[0], 10);
-    const children = Array.from(row.children);
-    const idx = children.indexOf(cell);
-    const days = ['一','二','三','四','五','六','日'];
-    const day = days[idx - 1]; // 因为第0列是“第X周”标签
-    const newStatus = cell.classList.contains('free') ? 'booked' : 'free';
-    cell.className = `cell ${newStatus}`;
-    const statusDiv = cell.querySelector('.status');
-    if (statusDiv) statusDiv.textContent = newStatus === 'booked' ? '●' : '';
-
-    // 尝试发送到后端
-    try {
-      const res = await fetch('/api/update', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ table_id: tableId, week, day, status: newStatus })
-      });
-      if (!res.ok) throw new Error('server update failed');
-    } catch (e) {
-      // 回退：写入 localStorage（模拟持久化）
-      let localData = [];
-      try {
-        const s = window.localStorage.getItem('mock_schedule');
-        localData = s ? JSON.parse(s) : (data || []);
-      } catch (err) { localData = (data || []); }
-      const idx2 = localData.findIndex(d => d.table_id === tableId && d.week === week && d.day === day);
-      if (idx2 >= 0) localData[idx2].status = newStatus;
-      else localData.push({ table_id: tableId, week, day, status: newStatus });
-      saveMockData(localData);
-    }
-  });
-}
-
-loadSchedule();
+// 启动加载
+document.addEventListener('DOMContentLoaded', loadSchedule);

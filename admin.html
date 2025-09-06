@@ -3,9 +3,33 @@
 <head>
   <link rel="stylesheet" href="style.css">
   <title>管理员编辑</title>
+  <!-- 引入 Supabase JS 客户端 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    .notification {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 15px 20px;
+      border-radius: 4px;
+      background-color: #4caf50;
+      color: white;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      opacity: 0;
+      transition: opacity 0.3s;
+      z-index: 1000;
+    }
+    .notification.show {
+      opacity: 1;
+    }
+    .notification.error {
+      background-color: #dc3545;
+    }
+  </style>
 </head>
 <body>
   <h1>管理员编辑模式</h1>
+  <p id="status-message">点击单元格切换预约状态，更改会自动保存</p>
 
   <!-- 第一个表格 -->
   <table id="schedule1">
@@ -40,6 +64,8 @@
     </thead>
     <tbody id="grid2"></tbody>
   </table>
+
+  <div class="notification" id="notification">更改已保存!</div>
 
   <script src="script.js"></script>
 </body>
